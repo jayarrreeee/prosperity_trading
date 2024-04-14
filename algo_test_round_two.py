@@ -1,72 +1,53 @@
+from datamodel import OrderDepth, UserId, TradingState, Order
+from typing import List, Dict
 import jsonpickle
 
-class Order:
-    def __init__(self, symbol, price, quantity):
-        self.symbol = symbol
-        self.price = price
-        self.quantity = quantity
-
-class OrderDepth:
-    def __init__(self, buy_orders=None, sell_orders=None):
-        if buy_orders is None:
-            buy_orders = {}
-        if sell_orders is None:
-            sell_orders = {}
-        self.buy_orders = buy_orders
-        self.sell_orders = sell_orders
-
-class TradingState:
-    def __init__(self, traderData='', order_depths={}, position={}):
-        self.traderData = traderData
-        self.order_depths = order_depths
-        self.position = position
-
 class Trader:
-    def __init__(self, position_limits):
-        self.position_limits = position_limits  # Dictionary of product position limits
+
+    def __init__(self):
+        self.position_limits = {'STARFRUIT': 20, 'AMETHYSTS': 20, 'ORCHIDS': 100}
 
     def run(self, state: TradingState):
-        orders_to_place = {}
-        for product, depth in state.order_depths.items():
-            current_position = state.position.get(product, 0)
-            orders = self.decide_orders(product, depth, current_position)
-            if orders:
-                orders_to_place[product] = orders
-        # Other logic and return statement here
+        print("traderData: " + state.traderData)
+        print("Observations: " + str(state.observations))
+        result = {}
+        conversions = 0
+        for product in state.order_depths:
+            order_depth: OrderDepth = state.order_depths[product]
+            orders: List[Order] = []
+            acceptable_price = self.calculate_acceptable_price(product, state.observations, order_depth)
+            
+            print(f"Acceptable price for {product}: {acceptable_price}")
+            print(f"Buy Order depth: {len(order_depth.buy_orders)}, Sell order depth: {len(order_depth.sell_orders)}")
+    
+            # Handling sell orders
+            for price, qty in order_depth.sell_orders.items():
+                if price <= acceptable_price:
+                    print(f"BUY {abs(qty)}x at {price}")
+                    orders.append(Order(product, price, abs(qty)))
+    
+            # Handling buy orders
+            for price, qty in order_depth.buy_orders.items():
+                if price >= acceptable_price:
+                    print(f"SELL {qty}x at {price}")
+                    orders.append(Order(product, price, -qty))
+            
+            result[product] = orders
+            conversions += self.handle_conversions(product, state.observations.get('complexObservations', {}).get(product))
+        
+        traderData = jsonpickle.encode({'lastRunInfo': result})  # Example of serializing some state information
+        return result, conversions, traderData
 
-    def decide_orders(self, product, depth, current_position):
-        # Trading logic to decide on orders
-        orders = []
-        acceptable_buy_price = max(depth.buy_orders.keys(), default=0) + 0.01
-        acceptable_sell_price = min(depth.sell_orders.keys(), default=float('inf')) - 0.01
+    def calculate_acceptable_price(self, product: str, observations, order_depth: OrderDepth):
+        # Implement dynamic pricing based on historical data and observations
+        if product in observations['plainValueObservations']:
+            return observations['plainValueObservations'][product]
+        else:
+            return sum(order_depth.buy_orders.keys() | order_depth.sell_orders.keys()) / len(order_depth.buy_orders | order_depth.sell_orders)
 
-        if acceptable_buy_price < 10 and current_position < self.position_limits.get(product, 0):
-            # Place a buy order
-            quantity_to_buy = min(5, self.position_limits[product] - current_position)  # Example fixed quantity
-            orders.append(Order(product, acceptable_buy_price, quantity_to_buy))
+    def handle_conversions(self, product, conversion_observation):
+        if conversion_observation:
+            return int(conversion_observation.askPrice - conversion_observation.bidPrice)  # Simple example of using price spread
+        return 0
 
-        if acceptable_sell_price > 10 and current_position > 0:
-            # Place a sell order
-            quantity_to_sell = min(5, current_position)  # Example fixed quantity
-            orders.append(Order(product, acceptable_sell_price, -quantity_to_sell))
-
-        return orders
-
-
-# Mock data for testing
-position_limits = {'STARFRUIT': 20, 'AMETHYSTS': 20, 'ORCHIDS': 100}
-trader = Trader(position_limits)
-
-# Simulated order depth for round 1 and 2
-order_depths = {
-    'STARFRUIT': OrderDepth({8: 10, 9: 15}, {11: -10, 12: -5}),
-    'AMETHYSTS': OrderDepth({9: 20}, {13: -10, 14: -20}),
-    'ORCHIDS': OrderDepth({5: 30}, {7: -15, 8: -25})
-}
-
-# Current positions assuming some previous trades
-current_positions = {'STARFRUIT': 10, 'AMETHYSTS': 5, 'ORCHIDS': 50}
-
-state = TradingState(order_depths=order_depths, position=current_positions)
-results = trader.run(state)
-print(results)
+# Assuming the datamodel and other classes are properly defined elsewhere
