@@ -23,27 +23,35 @@ class TradingState:
 
 class Trader:
     def __init__(self, position_limits):
-        self.position_limits = position_limits
+        self.position_limits = position_limits  # Dictionary of product position limits
 
-    def run(self, state):
-        try:
-            start_time = time.time()  # Monitor start time
-            orders_to_place = {}
-    
-            for product, depth in state.order_depths.items():
-                if time.time() - start_time > 0.95:  # Check if close to timeout
-                    print("Approaching timeout, stopping processing.")
-                    break  # Stop processing to avoid timeout
-    
-                orders = self.decide_orders(product, depth, state.position.get(product, 0))
-                if orders:
-                    orders_to_place[product] = orders
-    
-            return jsonpickle.encode(orders_to_place)  # Example of returning results
-    
-        except Exception as e:
-            print(f"Error during execution: {str(e)}")
-            return jsonpickle.encode({}) 
+    def run(self, state: TradingState):
+        orders_to_place = {}
+        for product, depth in state.order_depths.items():
+            current_position = state.position.get(product, 0)
+            orders = self.decide_orders(product, depth, current_position)
+            if orders:
+                orders_to_place[product] = orders
+        # Other logic and return statement here
+
+    def decide_orders(self, product, depth, current_position):
+        # Trading logic to decide on orders
+        orders = []
+        acceptable_buy_price = max(depth.buy_orders.keys(), default=0) + 0.01
+        acceptable_sell_price = min(depth.sell_orders.keys(), default=float('inf')) - 0.01
+
+        if acceptable_buy_price < 10 and current_position < self.position_limits.get(product, 0):
+            # Place a buy order
+            quantity_to_buy = min(5, self.position_limits[product] - current_position)  # Example fixed quantity
+            orders.append(Order(product, acceptable_buy_price, quantity_to_buy))
+
+        if acceptable_sell_price > 10 and current_position > 0:
+            # Place a sell order
+            quantity_to_sell = min(5, current_position)  # Example fixed quantity
+            orders.append(Order(product, acceptable_sell_price, -quantity_to_sell))
+
+        return orders
+
 
 # Mock data for testing
 position_limits = {'STARFRUIT': 20, 'AMETHYSTS': 20, 'ORCHIDS': 100}
