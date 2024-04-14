@@ -1,53 +1,135 @@
-from datamodel import OrderDepth, UserId, TradingState, Order
-from typing import List, Dict
-import jsonpickle
+import json
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from typing import Any
+
+class Logger:
+    def __init__(self) -> None:
+        self.logs = ""
+        self.max_log_length = 3750
+
+    def print(self, *objects: Any, sep: str = " ", end: str = "\n") -> None:
+        self.logs += sep.join(map(str, objects)) + end
+
+    def flush(self, state: TradingState, orders: dict[Symbol, list[Order]], conversions: int, trader_data: str) -> None:
+        base_length = len(self.to_json([
+            self.compress_state(state, ""),
+            self.compress_orders(orders),
+            conversions,
+            "",
+            "",
+        ]))
+
+        # We truncate state.traderData, trader_data, and self.logs to the same max. length to fit the log limit
+        max_item_length = (self.max_log_length - base_length) // 3
+
+        print(self.to_json([
+            self.compress_state(state, self.truncate(state.traderData, max_item_length)),
+            self.compress_orders(orders),
+            conversions,
+            self.truncate(trader_data, max_item_length),
+            self.truncate(self.logs, max_item_length),
+        ]))
+
+        self.logs = ""
+
+    def compress_state(self, state: TradingState, trader_data: str) -> list[Any]:
+        return [
+            state.timestamp,
+            trader_data,
+            self.compress_listings(state.listings),
+            self.compress_order_depths(state.order_depths),
+            self.compress_trades(state.own_trades),
+            self.compress_trades(state.market_trades),
+            state.position,
+            self.compress_observations(state.observations),
+        ]
+
+    def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
+        compressed = []
+        for listing in listings.values():
+            compressed.append([listing["symbol"], listing["product"], listing["denomination"]])
+
+        return compressed
+
+    def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
+        compressed = {}
+        for symbol, order_depth in order_depths.items():
+            compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
+
+        return compressed
+
+    def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
+        compressed = []
+        for arr in trades.values():
+            for trade in arr:
+                compressed.append([
+                    trade.symbol,
+                    trade.price,
+                    trade.quantity,
+                    trade.buyer,
+                    trade.seller,
+                    trade.timestamp,
+                ])
+
+        return compressed
+
+    def compress_observations(self, observations: Observation) -> list[Any]:
+        conversion_observations = {}
+        for product, observation in observations.conversionObservations.items():
+            conversion_observations[product] = [
+                observation.bidPrice,
+                observation.askPrice,
+                observation.transportFees,
+                observation.exportTariff,
+                observation.importTariff,
+                observation.sunlight,
+                observation.humidity,
+            ]
+
+        return [observations.plainValueObservations, conversion_observations]
+
+    def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
+        compressed = []
+        for arr in orders.values():
+            for order in arr:
+                compressed.append([order.symbol, order.price, order.quantity])
+
+        return compressed
+
+    def to_json(self, value: Any) -> str:
+        return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
+
+    def truncate(self, value: str, max_length: int) -> str:
+        if len(value) <= max_length:
+            return value
+
+        return value[:max_length - 3] + "..."
+
+logger = Logger()
 
 class Trader:
-
-    def __init__(self):
-        self.position_limits = {'STARFRUIT': 20, 'AMETHYSTS': 20, 'ORCHIDS': 100}
-
-    def run(self, state: TradingState):
-        print("traderData: " + state.traderData)
-        print("Observations: " + str(state.observations))
-        result = {}
+    def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
+        orders = {}
         conversions = 0
-        for product in state.order_depths:
-            order_depth: OrderDepth = state.order_depths[product]
-            orders: List[Order] = []
-            acceptable_price = self.calculate_acceptable_price(product, state.observations, order_depth)
-            
-            print(f"Acceptable price for {product}: {acceptable_price}")
-            print(f"Buy Order depth: {len(order_depth.buy_orders)}, Sell order depth: {len(order_depth.sell_orders)}")
-    
-            # Handling sell orders
-            for price, qty in order_depth.sell_orders.items():
-                if price <= acceptable_price:
-                    print(f"BUY {abs(qty)}x at {price}")
-                    orders.append(Order(product, price, abs(qty)))
-    
-            # Handling buy orders
-            for price, qty in order_depth.buy_orders.items():
-                if price >= acceptable_price:
-                    print(f"SELL {qty}x at {price}")
-                    orders.append(Order(product, price, -qty))
-            
-            result[product] = orders
-            conversions += self.handle_conversions(product, state.observations.get('complexObservations', {}).get(product))
-        
-        traderData = jsonpickle.encode({'lastRunInfo': result})  # Example of serializing some state information
-        return result, conversions, traderData
+        trader_data = ""
 
-    def calculate_acceptable_price(self, product: str, observations, order_depth: OrderDepth):
-        # Implement dynamic pricing based on historical data and observations
-        if product in observations['plainValueObservations']:
-            return observations['plainValueObservations'][product]
-        else:
-            return sum(order_depth.buy_orders.keys() | order_depth.sell_orders.keys()) / len(order_depth.buy_orders | order_depth.sell_orders)
+        for product, order_depth in state.order_depths.items():
+            orders[product] = []
 
-    def handle_conversions(self, product, conversion_observation):
-        if conversion_observation:
-            return int(conversion_observation.askPrice - conversion_observation.bidPrice)  # Simple example of using price spread
-        return 0
+            acceptable_price = 10
+            logger.print(f"Acceptable price for {product}: {acceptable_price}")
 
-# Assuming the datamodel and other classes are properly defined elsewhere
+            if len(order_depth.sell_orders) != 0:
+                best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
+                if int(best_ask) < acceptable_price:
+                    logger.print("BUY", str(-best_ask_amount) + "x", best_ask)
+                    orders[product].append(Order(product, best_ask, -best_ask_amount))
+
+            if len(order_depth.buy_orders) != 0:
+                best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
+                if int(best_bid) > acceptable_price:
+                    logger.print("SELL", str(best_bid_amount) + "x", best_bid)
+                    orders[product].append(Order(product, best_bid, -best_bid_amount))
+
+        logger.flush(state, orders, conversions, trader_data)
+        return orders, conversions, trader_data
