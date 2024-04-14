@@ -1,41 +1,59 @@
-class Trader:
-    def __init__(self, loss_threshold):
-        self.loss_threshold = loss_threshold
+from datamodel import OrderDepth, UserId, TradingState, Order
+from typing import Dict, List
 
-    def run(self, state: TradingState):
+class Trader:
+    def __init__(self):
+        self.position_limits = {
+            "STARFRUIT": 20,
+            "AMETHYSTS": 20,
+            "ORCHIDS": 100
+        }
+        self.positions = {key: 0 for key in self.position_limits}
+    
+    def run(self, state: TradingState) -> Dict[str, List[Order]]:
         result = {}
         for product, order_depth in state.order_depths.items():
-            try:
-                orders = []
-                best_ask = min(order_depth.sell_orders, default=None)
-                best_bid = max(order_depth.buy_orders, default=None)
-                
-                if best_ask is not None and best_bid is not None:
-                    mid_price = (order_depth.sell_orders[best_ask] + order_depth.buy_orders[best_bid]) / 2
-                    spread = best_ask - best_bid
-                    acceptable_price_buy = mid_price - spread * 0.05
-                    acceptable_price_sell = mid_price + spread * 0.05
-
-                    # Debugging output
-                    print(f'Product: {product}, Best Ask: {best_ask}, Best Bid: {best_bid}, Mid Price: {mid_price}')
-
-                    best_ask_amount = order_depth.sell_orders[best_ask]
-                    best_bid_amount = order_depth.buy_orders[best_bid]
-
-                    if best_ask < acceptable_price_buy:
-                        estimated_loss = (acceptable_price_buy - best_ask) * best_ask_amount
-                        if estimated_loss > self.loss_threshold:
-                            orders.append(Order(product, best_ask, -best_ask_amount))
-
-                    if best_bid > acceptable_price_sell:
-                        estimated_gain = (best_bid - acceptable_price_sell) * best_bid_amount
-                        if estimated_gain > self.loss_threshold:
-                            orders.append(Order(product, best_bid, -best_bid_amount))
-                
-                result[product] = orders
-
-            except Exception as e:
-                print(f'Error processing product {product}: {str(e)}')
-
+            orders = self.decide_orders(product, order_depth)
+            result[product] = orders
         return result
+
+    def decide_orders(self, product: str, order_depth: OrderDepth) -> List[Order]:
+        orders = []
+        # Basic market making strategy for AMETHYSTS
+        if product == "AMETHYSTS":
+            midpoint = (order_depth.sell_orders[0][0] + order_depth.buy_orders[0][0]) / 2
+            spread = 0.05 * midpoint
+            buy_price = midpoint - spread
+            sell_price = midpoint + spread
+            if self.positions[product] < self.position_limits[product]:
+                orders.append(Order(product, buy_price, 1))  # Buy 1 unit
+            if self.positions[product] > -self.position_limits[product]:
+                orders.append(Order(product, sell_price, -1))  # Sell 1 unit
+        
+        # Momentum trading strategy for STARFRUIT
+        elif product == "STARFRUIT":
+            if len(order_depth.sell_orders) > 0 and len(order_depth.buy_orders) > 0:
+                if order_depth.sell_orders[0][0] < order_depth.buy_orders[0][0]:
+                    # Buy if the sell price is unexpectedly low
+                    orders.append(Order(product, order_depth.sell_orders[0][0], 1))
+                elif order_depth.sell_orders[0][0] > order_depth.buy_orders[0][0]:
+                    # Sell if the buy price is unexpectedly high
+                    orders.append(Order(product, order_depth.buy_orders[0][0], -1))
+
+        # Factor-based strategy for ORCHIDS (simplified)
+        elif product == "ORCHIDS":
+            # Placeholder for complexity: react to external data
+            buy_price = min(order.price for order, qty in order_depth.sell_orders)
+            sell_price = max(order.price for order, qty in order_depth.buy_orders)
+            if self.positions[product] < self.position_limits[product]:
+                orders.append(Order(product, buy_price, 2))  # More aggressive buying
+            if self.positions[product] > -self.position_limits[product]:
+                orders.append(Order(product, sell_price, -2))  # More aggressive selling
+
+        return orders
+
+# Usage
+# trader = Trader()
+# current_state = TradingState(...)  # This should be filled with the actual trading data
+# orders_to_place = trader.run(current_state)
 
